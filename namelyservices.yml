@@ -1,0 +1,149 @@
+---
+- hosts: namelyservices
+  user: ubuntu
+  sudo: True
+  vars_files:
+    - vars/services.yml
+  roles:
+    - common-docker
+    - nginx-services
+    - supervisord
+
+  pre_tasks:
+    - name: Install pip
+      apt: name=python-pip state=present
+
+    - name: Install docker-py
+      pip: name=docker-py state=present
+
+    - name: Add admin ssh authorized keys.
+      authorized_key: user={{ item }} key="{{ lookup('file', 'keys/' + item ) }}"
+      with_items:
+        - ubuntu
+      tags: users
+
+    - name: Mount drive
+      mount: name=/var/lib/docker  src=/dev/xvdb fstype=ext4 state=present
+
+    - name: Upload docker config
+      copy: src="~/.dockercfg" dest=/root/.dockercfg owner=root
+      tags: wiki
+
+    - name: Wiki config
+      template: src=templates/wiki.conf.j2 dest=/etc/nginx/sites-enabled/wiki.conf owner=root group=root mode=0644
+      notify: "Restart nginx"
+      tags: wiki
+
+    - name: Releases config
+      template: src=templates/releases.conf.j2 dest=/etc/nginx/sites-enabled/releases.conf owner=root group=root mode=0644
+      notify: "Restart nginx"
+
+    - name: Import config
+      template: src=templates/import.conf.j2 dest=/etc/nginx/sites-enabled/import.conf owner=root group=root mode=0644
+      notify: "Restart nginx"
+
+    - name: Phonecenter config
+      template: src=templates/phonecenter.conf.j2 dest=/etc/nginx/sites-enabled/phonecenter.conf owner=root group=root mode=0644
+      notify: "Restart nginx"
+
+    - name: Run redis-image
+      docker:
+        image: amos6224/redis
+        detach: True
+        ports: 6379:6379
+
+    - name: Run Wiki
+      docker:
+        image: "namely/wiki:v2.0"
+        detach: True
+        ports: 4040:4040
+        state: running
+        env:
+          GOOGLE_CLIENT_ID: '{{ wiki_google_client_id }}'
+          GOOGLE_CLIENT_SECRET: '{{ wiki_google_client_secret }}'
+        name: wiki
+      tags: wiki
+
+    - name: Run boo
+      docker:
+        image: "amos6224/boo3"
+        detach: True
+        state: running
+        env: "HUBOT_HIPCHAT_JID={{ hubot_hipchat_jid }},HUBOT_HIPCHAT_PASSWORD={{ hubot_hipchat_password }},WORDNIK_API_KEY={{ wordnik_api_key }}"
+        name: boo
+
+    - name: Run releases
+      docker:
+        image: "namely/releases:0.1"
+        detach: True
+        ports: 4050:4050
+        state: running
+        env: "PORT=4050,RACK_ENV=production,AWS_ACCESS_KEY_ID=AKIAIQQZ7MFU2SKNOVIA,AWS_SECRET_ACCESS_KEY=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"
+        name: releases
+
+    - name: Run queue-pageviews
+      docker:
+        image: "namely/queue:1.1"
+        detach: True
+        state: running
+        env: "AWS_ACCESS_KEY={{ queue_aws_key }},AWS_SECRET_KEY={{ queue_aws_secret }},AWS_REGION=us-east-1b,AWS_SQS_QUEUE_URL={{ queue_queue_url }},WRITER_USER={{ queue_writer_user }},WRITER_PASSWORD={{ queue_writer_password }},WRITER_HOST={{ queue_writer_host }},WRITER_PORT={{ queue_writer_port }},WRITER_DATABASE={{ queue_writer_database }},N_QUEUES=10,STACKED_MESSAGES=1000,BATCH_MAX_TIME=120,QUEUE_WRITE_MESSAGES=pageviews,WRITER_TYPE=postgres"
+        name: queue-pageviews
+      tags: queue
+
+    - name: Run queue-companies
+      docker:
+        image: "namely/queue:1.1"
+        detach: True
+        state: running
+        env: "AWS_ACCESS_KEY={{ queue_aws_key }},AWS_SECRET_KEY={{ queue_aws_secret }},AWS_REGION=us-east-1b,AWS_SQS_QUEUE_URL={{ queue_queue_url }},WRITER_USER={{ queue_writer_user }},WRITER_PASSWORD={{ queue_writer_password }},WRITER_HOST={{ queue_writer_host }},WRITER_PORT={{ queue_writer_port }},WRITER_DATABASE={{ queue_writer_database }},N_QUEUES=10,STACKED_MESSAGES=100,BATCH_MAX_TIME=120,QUEUE_WRITE_MESSAGES=companies,WRITER_TYPE=postgres"
+        name: queue-companies
+      tags: queue
+
+    - name: Run import
+      docker:
+        image: "namely/import:0.2"
+        detach: True
+        ports: 5000:5000
+        state: running
+        env: "IMPORT_GOOGLE_ID={{ import_google_id }},IMPORT_GOOGLE_SECRET={{ import_google_secret }},IMPORT_SECRET_KEY={{ import_secret_key }},IMPORT_NAMELY_ID={{ import_namely_id }},IMPORT_NAMELY_SECRET={{ import_namely_secret }}"
+        name: import
+      tags: import
+
+    - name: Run dronemetrics
+      docker:
+        image: "namely/drone_metrics"
+        detach: True
+        ports: 4200:4200
+        state: running
+        env: "DB_NAME={{ drone_metrics_db }},DB_USER={{ drone_metrics_db_user }},DB_HOST={{ drone_metrics_db_host }},DB_PWD={{ drone_metrics_db_pwd }},DB_PORT={{ drone_metrics_db_port }}"
+        name: dronemetrics
+
+    - name: Run leadfinder
+      docker:
+        image: "namely/lead_finder:0.1"
+        detach: True
+        state: running
+        env: "LEAD_FINDER_EMAIL_USER={{ lead_finder_email_user }},LEAD_FINDER_EMAIL_PASS={{ lead_finder_email_pass }},LEAD_FINDER_EMAIL_SERVER={{ lead_finder_email_server }},LEAD_FINDER_EMAIL_PORT={{ lead_finder_email_port }},LEAD_FINDER_EMAIL_DOMAIN={{ lead_finder_email_domain }},LEAD_FINDER_EMAIL_TARGET={{ lead_finder_email_target }},RUN_HOUR={{ lead_finder_run_hour }},RUN_MINUTE={{ lead_finder_run_minute }},CRUNCHBASE_API_KEY={{ lead_finder_crunchbase_key }}"
+        name: leadfinder
+
+    - name: Run Phonecenter
+      docker:
+        image: "namely/phonecenter:1.5"
+        detach: True
+        ports: 1718:1718
+        state: running
+        env: "PORT=1718,GOOGLE_CLIENT_ID={{ pcenter_google_client_id }},GOOGLE_CLIENT_SECRET={{ pcenter_google_client_secret }},CALENDAR_ID={{ pcenter_calendar_id }},REFRESH_TOKEN={{ pcenter_refresh_token }}"
+        name: phonecenter
+      notify: "Restart nginx"
+
+
+  post_tasks:
+    - name: Delete docker hub conf
+      file: path=/root/.dockercfg state=absent
+      tags: wiki
+
+  tasks:
+
+    - name: Delete docker conf
+      file: path=/root/.dockercfg state=absent
+
